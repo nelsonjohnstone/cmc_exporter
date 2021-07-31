@@ -1,11 +1,15 @@
 package collector
 
 import (
+	"fmt"
 	"net/http"
-	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
+	"github.com/gocolly/colly"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -44,7 +48,7 @@ type coinMetric struct {
 type CoinStats struct {
 	logger log.Logger
 	client *http.Client
-	url    *url.URL
+	url    string
 
 	up                              prometheus.Gauge
 	totalScrapes, htmlParseFailures prometheus.Counter
@@ -53,7 +57,7 @@ type CoinStats struct {
 }
 
 // NewCoinStats returns a new Collector exposing Coin stats.
-func NewCoinStats(logger log.Logger, client *http.Client, url *url.URL) *CoinStats {
+func NewCoinStats(logger log.Logger, client *http.Client, url string) *CoinStats {
 	subsystem := "coin_stats"
 
 	return &CoinStats{
@@ -99,6 +103,78 @@ func NewCoinStats(logger log.Logger, client *http.Client, url *url.URL) *CoinSta
 				},
 				Labels: defaultCoinStatsLabelValues,
 			},
+			{
+				Type: prometheus.GaugeValue,
+				Desc: prometheus.NewDesc(
+					prometheus.BuildFQName(namespace, subsystem, "circulating_supply"),
+					"The amount of coins that are circulating in the market and are in public hands.",
+					defaultCoinStatsLabels, nil,
+				),
+				Value: func(coinStat Coin) float64 {
+					return float64(coinStat.Circulating_Supply)
+				},
+				Labels: defaultCoinStatsLabelValues,
+			},
+			{
+				Type: prometheus.GaugeValue,
+				Desc: prometheus.NewDesc(
+					prometheus.BuildFQName(namespace, subsystem, "volume_24h"),
+					"A measure of how much of a cryptocurrency was traded in the last 24 hours.",
+					defaultCoinStatsLabels, nil,
+				),
+				Value: func(coinStat Coin) float64 {
+					return float64(coinStat.Volume_24h)
+				},
+				Labels: defaultCoinStatsLabelValues,
+			},
+			{
+				Type: prometheus.GaugeValue,
+				Desc: prometheus.NewDesc(
+					prometheus.BuildFQName(namespace, subsystem, "change_1h"),
+					"Percentage change in price over the last 1 hour.",
+					defaultCoinStatsLabels, nil,
+				),
+				Value: func(coinStat Coin) float64 {
+					return float64(coinStat.Change_1h)
+				},
+				Labels: defaultCoinStatsLabelValues,
+			},
+			{
+				Type: prometheus.GaugeValue,
+				Desc: prometheus.NewDesc(
+					prometheus.BuildFQName(namespace, subsystem, "change_24h"),
+					"Percentage change in price over the last 24 hours.",
+					defaultCoinStatsLabels, nil,
+				),
+				Value: func(coinStat Coin) float64 {
+					return float64(coinStat.Change_24h)
+				},
+				Labels: defaultCoinStatsLabelValues,
+			},
+			{
+				Type: prometheus.GaugeValue,
+				Desc: prometheus.NewDesc(
+					prometheus.BuildFQName(namespace, subsystem, "change_7d"),
+					"Percentage change in price over the last 7 days.",
+					defaultCoinStatsLabels, nil,
+				),
+				Value: func(coinStat Coin) float64 {
+					return float64(coinStat.Change_7d)
+				},
+				Labels: defaultCoinStatsLabelValues,
+			},
+			{
+				Type: prometheus.GaugeValue,
+				Desc: prometheus.NewDesc(
+					prometheus.BuildFQName(namespace, subsystem, "rank"),
+					"Current coin position by market cap",
+					defaultCoinStatsLabels, nil,
+				),
+				Value: func(coinStat Coin) float64 {
+					return float64(coinStat.Rank)
+				},
+				Labels: defaultCoinStatsLabelValues,
+			},
 		},
 	}
 }
@@ -117,17 +193,83 @@ func (c *CoinStats) Describe(ch chan<- *prometheus.Desc) {
 func (c *CoinStats) fetchAndDecodeCoinStats() ([]Coin, error) {
 	coins := make([]Coin, 0)
 
-	var coin Coin
-	coin.Price = 100
-	coin.Symbol = "BTC"
-	coins = append(coins, coin)
+	// Instantiate default collector
+	co := colly.NewCollector()
 
-	var coin1 Coin
-	coin1.Price = 50
-	coin1.Symbol = "ETH"
-	coins = append(coins, coin1)
+	co.OnHTML("tbody tr", func(e *colly.HTMLElement) {
+		if e.ChildText(".cmc-table__column-name") != "" {
+			coin := parseTable(e)
+			coins = append(coins, coin)
+		}
+	})
+
+	co.Visit(c.url)
 
 	return coins, nil
+}
+
+func toFloat(input string) float64 {
+	value, err := strconv.ParseFloat(input, 64)
+	if err != nil {
+		fmt.Println(err)
+		return -1
+	}
+
+	return value
+}
+
+func parsePrice(input string) float64 {
+	replacer := strings.NewReplacer("$", "", ",", "")
+	dollarValue := replacer.Replace(input)
+	return toFloat(dollarValue)
+}
+
+func parseMarketCap(input string) float64 {
+	reg, err := regexp.Compile("^\\$.*\\$")
+	if err != nil {
+		fmt.Println(err)
+		return -1
+	}
+	marketCapValue := reg.ReplaceAllString(input, "")
+
+	replacer := strings.NewReplacer("$", "", ",", "")
+	parsedValue := replacer.Replace(marketCapValue)
+	return toFloat(parsedValue)
+}
+
+func parseSupply(input string) float64 {
+	reg, err := regexp.Compile("[^0-9]+")
+	if err != nil {
+		fmt.Println(err)
+		return -1
+	}
+	supplyValue := reg.ReplaceAllString(input, "")
+	return toFloat(supplyValue)
+}
+
+func parsePercentage(input string) float64 {
+	reg, err := regexp.Compile("[^0-9\\.\\-]")
+	if err != nil {
+		fmt.Println(err)
+	}
+	percentValue := reg.ReplaceAllString(input, "")
+	return toFloat(percentValue)
+}
+
+func parseTable(e *colly.HTMLElement) Coin {
+	var coin Coin
+
+	coin.Rank, _ = strconv.ParseFloat(e.ChildText(".cmc-table__cell--sort-by__rank"), 64)
+	coin.Symbol = e.ChildText(".cmc-table__cell--sort-by__symbol")
+	coin.Market_Cap = parseMarketCap(e.ChildText(".cmc-table__cell--sort-by__market-cap"))
+	coin.Price = parsePrice(e.ChildText(".cmc-table__cell--sort-by__price"))
+	coin.Circulating_Supply = parseSupply(e.ChildText(".cmc-table__cell--sort-by__circulating-supply"))
+	coin.Volume_24h = parsePrice(e.ChildText(".cmc-table__cell--sort-by__volume-24-h"))
+	coin.Change_1h = parsePercentage(e.ChildText(".cmc-table__cell--sort-by__percent-change-1-h"))
+	coin.Change_24h = parsePercentage(e.ChildText(".cmc-table__cell--sort-by__percent-change-24-h"))
+	coin.Change_7d = parsePercentage(e.ChildText(".cmc-table__cell--sort-by__percent-change-7-d"))
+
+	return coin
 }
 
 // Collect collects CoinStats metrics.
