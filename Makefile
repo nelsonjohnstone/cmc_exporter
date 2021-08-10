@@ -18,11 +18,11 @@ pkgs    = $(shell $(GO) list ./... | grep -v /vendor/)
 
 PREFIX              ?= $(shell pwd)
 BIN_DIR             ?= $(shell pwd)
-DOCKER_IMAGE_NAME   ?= sql-exporter
+DOCKER_IMAGE_NAME   ?= cmc-exporter
 DOCKER_IMAGE_TAG    ?= $(subst /,-,$(shell git rev-parse --abbrev-ref HEAD))
 
 
-all: format build #test
+all: format build test
 
 style:
 	@echo ">> checking code style"
@@ -30,7 +30,7 @@ style:
 
 test:
 	@echo ">> running tests"
-	@$(GO) test -short -race $(pkgs)
+	@$(GO) test ./... -short -race $(pkgs)
 
 format:
 	@echo ">> formatting code"

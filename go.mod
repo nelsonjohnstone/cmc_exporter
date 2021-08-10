@@ -10,6 +10,7 @@ require (
 	github.com/antchfx/xmlquery v1.2.4 // indirect
 	github.com/antchfx/xpath v1.1.8 // indirect
 	github.com/go-kit/kit v0.11.0
+	github.com/go-kit/log v0.1.0
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/gocolly/colly v1.2.0
 	github.com/kennygrant/sanitize v1.2.4 // indirect
